@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+node_modules/
+frontend/dist/
+patchproof.db
+/tmp/patchproof/
+.env

@@ -1,0 +1,28 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./patchproof.db
+      - LLM_MOCK=${LLM_MOCK:-1}
+      - META_API_KEY=${META_API_KEY:-}
+      - META_API_BASE=${META_API_BASE:-https://api.llama.meta.com/v1}
+      - SANDBOX_BACKEND=${SANDBOX_BACKEND:-auto}
+    volumes:
+      - patchproof-data:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  patchproof-data:

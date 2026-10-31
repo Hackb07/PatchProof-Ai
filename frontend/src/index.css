@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background: #0b1116;
+  color: #dbe4ec;
+}
+pre { tab-size: 2; }
