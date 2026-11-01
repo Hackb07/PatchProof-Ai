@@ -7,3 +7,5 @@ frontend/dist/
 patchproof.db
 /tmp/patchproof/
 .env
+/target/
+/.toolchain/
