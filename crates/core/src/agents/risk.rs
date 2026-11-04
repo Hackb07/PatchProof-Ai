@@ -22,11 +22,7 @@ pub fn severity_prior(severity: &str) -> f64 {
 }
 
 /// Score each finding 0-10 with a rationale.
-pub async fn assess(
-    store: &Store,
-    llm: &LlmClient,
-    scan_id: &str,
-) -> Result<Vec<Finding>> {
+pub async fn assess(store: &Store, llm: &LlmClient, scan_id: &str) -> Result<Vec<Finding>> {
     let findings = store.list_findings(scan_id)?;
     for f in &findings {
         let (reply, score) = if llm.is_mock() {
@@ -85,8 +81,7 @@ pub async fn assess(
 
 fn parse_score(text: &str) -> Option<f64> {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    let re =
-        CELL.get_or_init(|| Regex::new(r"(?i)RISK_SCORE:\s*([0-9]+(?:\.[0-9]+)?)").unwrap());
+    let re = CELL.get_or_init(|| Regex::new(r"(?i)RISK_SCORE:\s*([0-9]+(?:\.[0-9]+)?)").unwrap());
     re.captures(text)
         .and_then(|c| c.get(1))
         .and_then(|m| m.as_str().parse::<f64>().ok())

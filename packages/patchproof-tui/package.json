@@ -1,0 +1,16 @@
+{
+  "name": "patchproof-tui",
+  "version": "0.1.0",
+  "description": "Terminal UI for scanning repositories and reviewing PatchProof security findings",
+  "type": "module",
+  "bin": {
+    "patchproof-tui": "./bin/patchproof-tui"
+  },
+  "files": [
+    "bin/patchproof-tui",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

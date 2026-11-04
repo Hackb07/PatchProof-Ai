@@ -28,7 +28,8 @@ def assess(session: Session, scan_id: str) -> list[Finding]:
                 f"Severity {f.severity} confidence {f.confidence}. {f.title} ({f.cwe}) "
                 f"at {f.file_path}:{f.line_no}\n{f.snippet}\n{f.explanation}",
             ).output
-            score = _parse_score(reply) or SEVERITY_PRIOR.get(f.severity, 5.0)
+            parsed = _parse_score(reply)
+            score = parsed if parsed is not None else SEVERITY_PRIOR.get(f.severity, 5.0)
             if f.confidence == "low":
                 score = max(1.0, score - 1.5)
         f.risk_score = round(max(0.0, min(10.0, score)), 1)

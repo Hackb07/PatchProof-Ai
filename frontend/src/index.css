@@ -1,9 +1,479 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap");
+
+/* Theme: Terminal Bay — Dev tools (terminal-bay-devtools)
+ * A technical, minimal development interface defined by flat-bordered
+ * surfaces, crisp typography, and high-contrast vivid green accents.
+ * Adapted for Tailwind v3 (plain :root / .dark CSS variables). */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-body {
-  background: #0b1116;
-  color: #dbe4ec;
+@layer base {
+  :root {
+    /* Observed cool-tinted slate grey neutral scale */
+    --palette-neutral-100: #FAFAFB;
+    --palette-neutral-150: #F8F9FA;
+    --palette-neutral-200: #F3F4F6;
+    --palette-neutral-250: #EBECEF;
+    --palette-neutral-300: #DFE1E5;
+    --palette-neutral-350: #D0D3D8;
+    --palette-neutral-400: #BEC1C8;
+    --palette-neutral-450: #A8ADB5;
+    --palette-neutral-500: #91959E;
+    --palette-neutral-550: #717783;
+    --palette-neutral-600: #585E69;
+    --palette-neutral-650: #444952;
+    --palette-neutral-700: #343840;
+    --palette-neutral-750: #272B31;
+    --palette-neutral-800: #1E2126;
+    --palette-neutral-850: #191B20;
+    --palette-neutral-900: #171A1D;
+    /* Vivid Terminal Bay cool-green brand color */
+    --palette-brand-100: #EAFFFA;
+    --palette-brand-150: #E5FFF9;
+    --palette-brand-200: #D6FFF5;
+    --palette-brand-250: #BDFFEF;
+    --palette-brand-300: #9AFFE6;
+    --palette-brand-350: #6DFFDB;
+    --palette-brand-400: #36FFCE;
+    --palette-brand-450: #00F5B8;
+    --palette-brand-500: #00A980;
+    --palette-brand-550: #008967;
+    --palette-brand-600: #006D52;
+    --palette-brand-650: #005540;
+    --palette-brand-700: #004231;
+    --palette-brand-750: #003226;
+    --palette-brand-800: #00271E;
+    --palette-brand-850: #002119;
+    --palette-brand-900: #001F17;
+    --palette-danger-100: #FEF9FA;
+    --palette-danger-150: #FEF7F8;
+    --palette-danger-200: #FDF1F2;
+    --palette-danger-250: #FBE6E8;
+    --palette-danger-300: #F9D6DA;
+    --palette-danger-350: #F6C3C8;
+    --palette-danger-400: #F2ABB2;
+    --palette-danger-450: #ED9099;
+    --palette-danger-500: #E6707C;
+    --palette-danger-550: #DE3747;
+    --palette-danger-600: #BE1E2D;
+    --palette-danger-650: #951723;
+    --palette-danger-700: #73111B;
+    --palette-danger-750: #590D14;
+    --palette-danger-800: #460A10;
+    --palette-danger-850: #3A080D;
+    --palette-danger-900: #37080C;
+    --palette-warning-100: #FFFAEC;
+    --palette-warning-150: #FFF9E7;
+    --palette-warning-200: #FFF6D9;
+    --palette-warning-250: #FFF0C1;
+    --palette-warning-300: #FFE8A0;
+    --palette-warning-350: #FFDD75;
+    --palette-warning-400: #FFD041;
+    --palette-warning-450: #FFC104;
+    --palette-warning-500: #BD8D00;
+    --palette-warning-550: #987200;
+    --palette-warning-600: #795B00;
+    --palette-warning-650: #5E4700;
+    --palette-warning-700: #483600;
+    --palette-warning-750: #372900;
+    --palette-warning-800: #2B2000;
+    --palette-warning-850: #241B00;
+    --palette-warning-900: #211900;
+    --palette-success-100: #EAFFFA;
+    --palette-success-150: #E5FFF9;
+    --palette-success-200: #D6FFF5;
+    --palette-success-250: #BDFFEF;
+    --palette-success-300: #9AFFE6;
+    --palette-success-350: #6DFFDB;
+    --palette-success-400: #36FFCE;
+    --palette-success-450: #00F5B8;
+    --palette-success-500: #00A980;
+    --palette-success-550: #008967;
+    --palette-success-600: #006D52;
+    --palette-success-650: #005540;
+    --palette-success-700: #004231;
+    --palette-success-750: #003226;
+    --palette-success-800: #00271E;
+    --palette-success-850: #002119;
+    --palette-success-900: #001F17;
+    --palette-info-100: #F9FAFC;
+    --palette-info-150: #F8F9FA;
+    --palette-info-200: #F2F4F7;
+    --palette-info-250: #E8ECF1;
+    --palette-info-300: #DBE1E9;
+    --palette-info-350: #CAD3DE;
+    --palette-info-400: #B6C2D0;
+    --palette-info-450: #9EAEBF;
+    --palette-info-500: #8496AC;
+    --palette-info-550: #617994;
+    --palette-info-600: #4C6076;
+    --palette-info-650: #3B4B5D;
+    --palette-info-700: #2D3948;
+    --palette-info-750: #222C37;
+    --palette-info-800: #1A222B;
+    --palette-info-850: #161C24;
+    --palette-info-900: #141B22;
+    --palette-accent-100: #EAFFFA;
+    --palette-accent-150: #E5FFF9;
+    --palette-accent-200: #D6FFF5;
+    --palette-accent-250: #BDFFEF;
+    --palette-accent-300: #9AFFE7;
+    --palette-accent-350: #6DFFDB;
+    --palette-accent-400: #36FFCE;
+    --palette-accent-450: #00F5B8;
+    --palette-accent-500: #00A980;
+    --palette-accent-550: #008967;
+    --palette-accent-600: #006D52;
+    --palette-accent-650: #005540;
+    --palette-accent-700: #004231;
+    --palette-accent-750: #003226;
+    --palette-accent-800: #00271E;
+    --palette-accent-850: #002119;
+    --palette-accent-900: #001F17;
+  }
+
+  :root {
+    --radius: 12px;
+    --background: #E0E6EB;
+    --foreground: #0A0A0B;
+    --card: #ECEDEE;
+    --card-foreground: #0A0A0B;
+    --popover: #ECEDEE;
+    --popover-foreground: #0A0A0B;
+    --primary: #00A980;
+    --primary-foreground: #0A0A0B;
+    --secondary: var(--palette-neutral-200);
+    --secondary-foreground: var(--palette-neutral-900);
+    --muted: var(--palette-neutral-200);
+    --muted-foreground: var(--palette-neutral-700);
+    --accent: var(--palette-brand-200);
+    --accent-foreground: var(--palette-neutral-900);
+    --destructive: #A91D22;
+    --destructive-foreground: #FFFFFF;
+    --danger-fg: #A91D22;
+    --success-fg: var(--palette-brand-600);
+    --border: #3E4C5C;
+    --input: #3E4C5C;
+    --ring: var(--palette-brand-500);
+    --font-sans: "Inter", system-ui, sans-serif;
+    --font-display: "Space Grotesk", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    --text-hero: 700 2.25rem/2.75rem var(--font-display);
+    --text-title: 700 1.5rem/1.75rem var(--font-display);
+    --text-heading: 700 1.25rem/1.5rem var(--font-display);
+    --text-body: 400 0.8125rem/1.25rem var(--font-sans);
+    --text-caption: 400 0.75rem/1.125rem var(--font-sans);
+    --text-label: 700 0.875rem/1.3125rem var(--font-sans);
+    --text-overline: 700 0.75rem/1rem var(--font-sans);
+    --text-overline-tracking: 0.05em;
+    --text-overline-transform: uppercase;
+    --gradient-brand_wash: linear-gradient(135deg, #00FFC0 0%, #00A980 100%);
+  }
+
+  .dark {
+    --background: #0A0A0B;
+    --foreground: #ECEDEE;
+    --card: #212326;
+    --card-foreground: #ECEDEE;
+    --popover: #212326;
+    --popover-foreground: #ECEDEE;
+    --primary: #00FFC0;
+    --primary-foreground: #0A0A0B;
+    --secondary: var(--palette-neutral-700);
+    --secondary-foreground: var(--palette-neutral-100);
+    --muted: var(--palette-neutral-800);
+    --muted-foreground: var(--palette-neutral-400);
+    --accent: var(--palette-brand-800);
+    --accent-foreground: var(--palette-brand-100);
+    --destructive: #A91D22;
+    --destructive-foreground: #FFFFFF;
+    --danger-fg: var(--palette-danger-400);
+    --success-fg: var(--palette-brand-400);
+    --border: #3E4C5C;
+    --input: #3E4C5C;
+    --ring: var(--palette-brand-500);
+  }
+
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body, #root {
+    min-width: 320px;
+    min-height: 100vh;
+  }
+
+  pre {
+    tab-size: 2;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+  }
+
+  ::selection {
+    background: var(--palette-brand-350);
+    color: #0A0A0B;
+  }
+
+  @media (max-width: 640px) {
+    body { font-size: 0.875rem; }
+    main { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+    button, a.btn, input, select { min-height: 2.5rem; }
+    .btn-sm { min-height: 2rem; }
+    pre, .codeblock { overflow-wrap: anywhere; }
+  }
 }
-pre { tab-size: 2; }
+
+@layer components {
+  .text-hero {
+    font: var(--text-hero);
+  }
+  .text-title {
+    font: var(--text-title);
+  }
+  .text-heading {
+    font: var(--text-heading);
+  }
+  .text-body {
+    font: var(--text-body);
+  }
+  .text-caption {
+    font: var(--text-caption);
+  }
+  .text-label {
+    font: var(--text-label);
+  }
+  .text-overline {
+    font: var(--text-overline);
+    letter-spacing: var(--text-overline-tracking);
+    text-transform: var(--text-overline-transform);
+  }
+
+  /* Flat-bordered container card: 12px radius, 1px slate border, no shadow. */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+
+  /* Buttons: sharp 4px radius, no wrap, primary action at 36px height. */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    font-family: var(--font-sans);
+    font-weight: 600;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+    user-select: none;
+    cursor: pointer;
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  .btn-md {
+    height: 2.25rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+  .btn-sm {
+    height: 1.5rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    font-size: 11px;
+    line-height: 1;
+  }
+  .btn-primary {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+  .btn-primary:hover {
+    filter: brightness(0.94);
+  }
+  .btn-secondary {
+    background: var(--secondary);
+    color: var(--secondary-foreground);
+    border-color: var(--border);
+  }
+  .btn-secondary:hover {
+    filter: brightness(0.95);
+  }
+  .btn-warn {
+    background: var(--palette-warning-200);
+    color: var(--palette-warning-750);
+    border-color: var(--palette-warning-400);
+  }
+  .btn-warn:hover {
+    filter: brightness(0.96);
+  }
+  .link-btn {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+    background: transparent;
+    border: none;
+    padding: 0.25rem;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .link-btn:hover {
+    color: var(--foreground);
+  }
+
+  /* Inputs: sharp 4px radius, 1px slate border, inset from the card. */
+  .input {
+    border-radius: 4px;
+    border: 1px solid var(--input);
+    font-family: var(--font-sans);
+    color: var(--foreground);
+    background: var(--background);
+  }
+  .input::placeholder {
+    color: var(--muted-foreground);
+  }
+  .input:focus {
+    outline: none;
+    border-color: var(--ring);
+  }
+  .input-md {
+    height: 2.25rem;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+    font-size: 13px;
+  }
+  .input-sm {
+    height: 2rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+
+  /* Status badges: fixed tints readable in both modes. */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    font-family: var(--font-sans);
+    font-weight: 600;
+    border-radius: 4px;
+    padding: 0.125rem 0.375rem;
+    font-size: 11px;
+    line-height: 1rem;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .badge-critical {
+    background: var(--palette-danger-600);
+    color: #FFFFFF;
+  }
+  .badge-high {
+    background: var(--palette-danger-200);
+    color: var(--palette-danger-750);
+    border-color: var(--palette-danger-400);
+  }
+  .badge-medium {
+    background: var(--palette-warning-200);
+    color: var(--palette-warning-750);
+    border-color: var(--palette-warning-400);
+  }
+  .badge-low {
+    background: var(--palette-neutral-200);
+    color: var(--palette-neutral-700);
+    border-color: var(--palette-neutral-400);
+  }
+  .badge-fixed {
+    background: var(--accent);
+    color: var(--accent-foreground);
+    border-color: var(--primary);
+  }
+  .badge-unfixed {
+    background: var(--palette-danger-200);
+    color: var(--palette-danger-750);
+    border-color: var(--palette-danger-400);
+  }
+  .badge-inconclusive {
+    background: var(--muted);
+    color: var(--muted-foreground);
+    border-color: var(--border);
+  }
+  .badge-repro {
+    background: var(--palette-warning-200);
+    color: var(--palette-warning-750);
+    border-color: var(--palette-warning-400);
+  }
+
+  /* Scan status dots. */
+  .dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    flex-shrink: 0;
+    background: var(--palette-neutral-400);
+  }
+  .dot-queued {
+    background: var(--palette-neutral-400);
+  }
+  .dot-scanning,
+  .dot-triaging {
+    background: var(--palette-info-400);
+  }
+  .dot-patching,
+  .dot-verifying {
+    background: var(--palette-warning-400);
+  }
+  .dot-done {
+    background: var(--primary);
+  }
+  .dot-failed {
+    background: var(--palette-danger-500);
+  }
+  .dot-cancelled {
+    background: var(--palette-neutral-600);
+  }
+
+  /* Code viewer: dark terminal bay in both modes. */
+  .codeblock {
+    background: var(--palette-neutral-900);
+    color: var(--palette-neutral-100);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1.25rem;
+    white-space: pre-wrap;
+    padding: 0.75rem 4rem 0.75rem 0.75rem;
+    overflow-x: auto;
+  }
+  .codeblock-amber {
+    color: var(--palette-warning-200);
+  }
+  .codeblock-green {
+    color: var(--palette-brand-300);
+  }
+}

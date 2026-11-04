@@ -8,11 +8,7 @@ use crate::truncate_chars;
 use super::llm::LlmClient;
 
 /// Confirm findings using repro evidence plus code context.
-pub async fn validate(
-    store: &Store,
-    llm: &LlmClient,
-    scan_id: &str,
-) -> Result<Vec<Finding>> {
+pub async fn validate(store: &Store, llm: &LlmClient, scan_id: &str) -> Result<Vec<Finding>> {
     let findings = store.list_findings(scan_id)?;
     for f in &findings {
         let reproduced = if f.reproduced { "True" } else { "False" };
@@ -32,8 +28,7 @@ pub async fn validate(
             )
             .await
             .output;
-        let upper = reply.to_ascii_uppercase();
-        if upper.contains("FALSE_POSITIVE") {
+        if is_false_positive(&reply) {
             store.update_finding_validation(&f.id, false, true)?;
         } else {
             store.update_finding_validation(&f.id, true, false)?;
@@ -47,4 +42,17 @@ pub async fn validate(
         "",
     )?;
     Ok(findings)
+}
+
+/// Parse `VERDICT: TRUE_POSITIVE|FALSE_POSITIVE`, preferring an explicitly
+/// labeled line so free-text mentions can't flip the verdict. Unlabeled
+/// replies confirm the finding (matching the mock).
+fn is_false_positive(output: &str) -> bool {
+    for line in output.lines() {
+        let upper = line.to_ascii_uppercase();
+        if let Some(rest) = upper.strip_prefix("VERDICT:") {
+            return rest.contains("FALSE_POSITIVE");
+        }
+    }
+    false
 }

@@ -9,11 +9,7 @@ use crate::store::Store;
 use super::llm::LlmClient;
 
 /// Dedupe raw findings and drop LLM-rejected ones.
-pub async fn triage(
-    store: &Store,
-    llm: &LlmClient,
-    scan_id: &str,
-) -> Result<Vec<Finding>> {
+pub async fn triage(store: &Store, llm: &LlmClient, scan_id: &str) -> Result<Vec<Finding>> {
     let findings = store.list_findings(scan_id)?;
     let total = findings.len();
     let mut kept = Vec::new();
@@ -35,10 +31,10 @@ pub async fn triage(
             )
             .await
             .output;
-        if verdict.to_ascii_uppercase().contains("DROP") {
-            store.delete_finding(&f.id)?;
-        } else {
+        if keep_verdict(&verdict) {
             kept.push(f);
+        } else {
+            store.delete_finding(&f.id)?;
         }
     }
     store.add_evidence(
@@ -49,4 +45,17 @@ pub async fn triage(
         "",
     )?;
     Ok(kept)
+}
+
+/// Parse `TRIAGE: KEEP|DROP`, preferring an explicitly labeled line so a
+/// free-text mention of "drop" (e.g. "do not drop this") can't discard a
+/// finding. Unlabeled replies keep the finding (matching the mock).
+fn keep_verdict(output: &str) -> bool {
+    for line in output.lines() {
+        let upper = line.to_ascii_uppercase();
+        if let Some(rest) = upper.strip_prefix("TRIAGE:") {
+            return !rest.contains("DROP");
+        }
+    }
+    true
 }

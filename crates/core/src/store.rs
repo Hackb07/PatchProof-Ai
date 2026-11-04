@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::config::Settings;
 use crate::error::Result;
-use crate::model::{now_rfc3339, new_id, Evidence, Finding, Patch, Scan, Verification};
+use crate::model::{new_id, now_rfc3339, Evidence, Finding, Patch, Scan, Verification};
 use crate::scanner::rules::RawFinding;
 
 const SCHEMA: &str = r#"
@@ -106,38 +106,51 @@ impl Store {
         }
         let conn = self.conn()?;
         conn.execute_batch(SCHEMA)?;
+        // Concurrent pipelines + API handlers share this file; WAL keeps
+        // readers from blocking writers (with the 5s busy timeout above).
+        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         Ok(())
     }
 
     // -- scans -----------------------------------------------------------
 
     pub fn create_scan(&self, repo_url: &str, branch: &str) -> Result<Scan> {
-        let scan = Scan {
-            id: new_id(),
-            repo_url: repo_url.to_string(),
-            branch: branch.to_string(),
-            status: "queued".to_string(),
-            created_at: now_rfc3339(),
-            finished_at: None,
-            repo_path: String::new(),
-            error: String::new(),
-        };
-        let conn = self.conn()?;
-        conn.execute(
-            "INSERT INTO scans (id, repo_url, branch, status, created_at, finished_at, repo_path, error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                scan.id,
-                scan.repo_url,
-                scan.branch,
-                scan.status,
-                scan.created_at,
-                scan.finished_at,
-                scan.repo_path,
-                scan.error
-            ],
-        )?;
-        Ok(scan)
+        // 12-hex ids can theoretically collide; retry with a fresh id.
+        let mut last_err = None;
+        for _ in 0..3 {
+            let scan = Scan {
+                id: new_id(),
+                repo_url: repo_url.to_string(),
+                branch: branch.to_string(),
+                status: "queued".to_string(),
+                created_at: now_rfc3339(),
+                finished_at: None,
+                repo_path: String::new(),
+                error: String::new(),
+            };
+            let conn = self.conn()?;
+            match conn.execute(
+                "INSERT INTO scans (id, repo_url, branch, status, created_at, finished_at, repo_path, error)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    scan.id,
+                    scan.repo_url,
+                    scan.branch,
+                    scan.status,
+                    scan.created_at,
+                    scan.finished_at,
+                    scan.repo_path,
+                    scan.error
+                ],
+            ) {
+                Ok(_) => return Ok(scan),
+                Err(e) if is_constraint_violation(&e) => last_err = Some(e),
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err(last_err
+            .map(crate::error::CoreError::from)
+            .unwrap_or_else(|| crate::error::CoreError::Other("scan id collision".to_string())))
     }
 
     pub fn get_scan(&self, scan_id: &str) -> Result<Option<Scan>> {
@@ -154,13 +167,61 @@ impl Store {
     }
 
     pub fn list_scans(&self, limit: i64) -> Result<Vec<Scan>> {
+        self.list_scans_paginated(limit, 0)
+    }
+
+    pub fn count_scans(&self) -> Result<usize> {
+        let conn = self.conn()?;
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM scans", [], |row| row.get(0))?;
+        Ok(n.max(0) as usize)
+    }
+
+    pub fn list_scans_paginated(&self, limit: i64, offset: i64) -> Result<Vec<Scan>> {
+        let limit = limit.clamp(1, 200);
+        let offset = offset.max(0);
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, repo_url, branch, status, created_at, finished_at, repo_path, error
-             FROM scans ORDER BY created_at DESC, rowid DESC LIMIT ?",
+             FROM scans ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
         )?;
-        let rows = stmt.query_map(params![limit], scan_from_row)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+        let rows = stmt.query_map(params![limit, offset], scan_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Delete a scan and all its findings, patches, verifications, and
+    /// evidence. Returns true when a scan existed.
+    pub fn delete_scan(&self, scan_id: &str) -> Result<bool> {
+        if self.get_scan(scan_id)?.is_none() {
+            return Ok(false);
+        }
+        self.clear_scan_results(scan_id)?;
+        let conn = self.conn()?;
+        conn.execute("DELETE FROM evidence WHERE scan_id = ?", params![scan_id])?;
+        conn.execute("DELETE FROM scans WHERE id = ?", params![scan_id])?;
+        Ok(true)
+    }
+
+    /// Mark a running scan as cancelled. Returns true when the status was
+    /// changed; terminal scans (`done`/`failed`/`cancelled`) are untouched.
+    pub fn cancel_scan(&self, scan_id: &str) -> Result<bool> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE scans SET status = 'cancelled', error = 'cancelled by user',
+                 finished_at = ?
+             WHERE id = ? AND status NOT IN ('done', 'failed', 'cancelled')",
+            params![now_rfc3339(), scan_id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// True when the pipeline should stop: scan deleted or cancelled.
+    pub fn is_aborted(&self, scan_id: &str) -> bool {
+        match self.get_scan(scan_id) {
+            Ok(Some(s)) => s.status == "cancelled",
+            Ok(None) => true,
+            Err(_) => false,
+        }
     }
 
     pub fn update_scan_status(&self, scan_id: &str, status: &str) -> Result<()> {
@@ -193,8 +254,8 @@ impl Store {
     pub fn set_scan_failed(&self, scan_id: &str, error: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
-            "UPDATE scans SET status = 'failed', error = ? WHERE id = ?",
-            params![error, scan_id],
+            "UPDATE scans SET status = 'failed', error = ?, finished_at = ? WHERE id = ?",
+            params![error, now_rfc3339(), scan_id],
         )?;
         Ok(())
     }
@@ -202,10 +263,43 @@ impl Store {
     pub fn reset_scan_queued(&self, scan_id: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
-            "UPDATE scans SET status = 'queued', error = '' WHERE id = ?",
+            "UPDATE scans SET status = 'queued', error = '', finished_at = NULL WHERE id = ?",
             params![scan_id],
         )?;
         Ok(())
+    }
+
+    /// Delete a scan's findings, patches, and verifications (for reruns).
+    /// Evidence rows are kept as the audit trail.
+    pub fn clear_scan_results(&self, scan_id: &str) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute(
+            "DELETE FROM verifications WHERE patch_id IN
+             (SELECT p.id FROM patches p JOIN findings f ON p.finding_id = f.id
+              WHERE f.scan_id = ?)",
+            params![scan_id],
+        )?;
+        conn.execute(
+            "DELETE FROM patches WHERE finding_id IN
+             (SELECT id FROM findings WHERE scan_id = ?)",
+            params![scan_id],
+        )?;
+        conn.execute("DELETE FROM findings WHERE scan_id = ?", params![scan_id])?;
+        Ok(())
+    }
+
+    /// Mark scans left mid-pipeline by a server restart as failed.
+    /// Returns the number of scans recovered.
+    pub fn fail_stale_scans(&self) -> Result<usize> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE scans SET status = 'failed',
+                 error = 'interrupted by server restart',
+                 finished_at = ?
+             WHERE status NOT IN ('done', 'failed', 'cancelled')",
+            params![now_rfc3339()],
+        )?;
+        Ok(changed)
     }
 
     // -- findings --------------------------------------------------------
@@ -293,18 +387,33 @@ impl Store {
             .collect())
     }
 
+    pub fn count_findings(&self, scan_id: &str) -> Result<usize> {
+        let conn = self.conn()?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM findings WHERE scan_id = ?",
+            params![scan_id],
+            |row| row.get(0),
+        )?;
+        Ok(n.max(0) as usize)
+    }
+
+    pub fn count_evidence(&self, scan_id: &str) -> Result<usize> {
+        let conn = self.conn()?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM evidence WHERE scan_id = ?",
+            params![scan_id],
+            |row| row.get(0),
+        )?;
+        Ok(n.max(0) as usize)
+    }
+
     pub fn delete_finding(&self, finding_id: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute("DELETE FROM findings WHERE id = ?", params![finding_id])?;
         Ok(())
     }
 
-    pub fn update_finding_risk(
-        &self,
-        finding_id: &str,
-        score: f64,
-        rationale: &str,
-    ) -> Result<()> {
+    pub fn update_finding_risk(&self, finding_id: &str, score: f64, rationale: &str) -> Result<()> {
         let conn = self.conn()?;
         conn.execute(
             "UPDATE findings SET risk_score = ?, risk_rationale = ? WHERE id = ?",
@@ -343,12 +452,7 @@ impl Store {
 
     // -- patches ---------------------------------------------------------
 
-    pub fn create_patch(
-        &self,
-        finding_id: &str,
-        diff: &str,
-        summary: &str,
-    ) -> Result<Patch> {
+    pub fn create_patch(&self, finding_id: &str, diff: &str, summary: &str) -> Result<Patch> {
         let patch = Patch {
             id: new_id(),
             finding_id: finding_id.to_string(),
@@ -591,4 +695,12 @@ fn evidence_from_row(row: &rusqlite::Row) -> rusqlite::Result<Evidence> {
         ref_id: row.get(5)?,
         created_at: row.get(6)?,
     })
+}
+
+fn is_constraint_violation(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(err, _)
+            if err.code == rusqlite::ErrorCode::ConstraintViolation
+    )
 }

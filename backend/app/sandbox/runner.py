@@ -95,9 +95,9 @@ def _run_docker(code: str) -> tuple[str, bool]:
         Path(tmp, "poc.py").write_text(code)
         proc = subprocess.run(
             ["docker", "run", "--rm", "--network", "none", "--memory", "256m",
-             "--cpus", "0.5", "-v", f"{tmp}:/work:ro", "python:3.12-slim",
+             "--cpus", "0.5", "-v", f"{tmp}:/work:ro", settings.sandbox_image,
              "python", "/work/poc.py"],
             capture_output=True, text=True, timeout=settings.sandbox_timeout_s + 30,
         )
-        log = f"$ docker run --rm --network none python:3.12-slim python /work/poc.py\n{proc.stdout}{proc.stderr}\n[exit={proc.returncode}]"
+        log = f"$ docker run --rm --network none {settings.sandbox_image} python /work/poc.py\n{proc.stdout}{proc.stderr}\n[exit={proc.returncode}]"
         return log, proc.returncode == 0 and "REPRODUCED" in proc.stdout

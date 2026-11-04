@@ -9,7 +9,14 @@ use crate::store::Store;
 
 use super::rules::scan_source;
 
-pub const SKIP_DIRS: &[&str] = &[".git", ".venv", "venv", "__pycache__", "node_modules", ".tox"];
+pub const SKIP_DIRS: &[&str] = &[
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    ".tox",
+];
 
 /// Scan every `*.py` file under `repo_path`, skipping vendored directories.
 pub fn scan_repo(store: &Store, scan_id: &str, repo_path: &str) -> Result<Vec<Finding>> {
@@ -18,6 +25,11 @@ pub fn scan_repo(store: &Store, scan_id: &str, repo_path: &str) -> Result<Vec<Fi
     for entry in walkdir::WalkDir::new(root)
         .into_iter()
         .filter_entry(|e| {
+            // Never follow symlinks out of the checkout: a hostile repo
+            // could otherwise link `evil.py` at a host file outside it.
+            if e.path_is_symlink() {
+                return false;
+            }
             if e.depth() > 0 && e.file_type().is_dir() {
                 let name = e.file_name().to_string_lossy();
                 if SKIP_DIRS.iter().any(|s| *s == name) {
@@ -29,7 +41,10 @@ pub fn scan_repo(store: &Store, scan_id: &str, repo_path: &str) -> Result<Vec<Fi
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
-        if path.is_file() && path.extension().map(|x| x == "py").unwrap_or(false) {
+        if !entry.path_is_symlink()
+            && path.is_file()
+            && path.extension().map(|x| x == "py").unwrap_or(false)
+        {
             files.push(path.to_path_buf());
         }
     }

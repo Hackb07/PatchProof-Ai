@@ -33,22 +33,22 @@
 
 ## Agent roles
 
-- **Planner** (`agents/planner.py`): owns the pipeline state machine, repo
+- **Planner** (`backend/app/agents/planner.py`, Rust: `crates/core/src/pipeline.rs`): owns the pipeline state machine, repo
   acquisition (GitHub clone or local copy), stage transitions, and failure
   capture. Every transition appends an `Evidence` row.
-- **Detector** (`agents/detector.py` + `scanner/`): static scan produces raw
+- **Detector** (`backend/app/agents/detector.py` + `scanner/`, Rust: `crates/core/src/agents/detector.rs` + `scanner/`): static scan produces raw
   findings; the LLM triage pass dedupes and drops obvious noise.
-- **Risk assessor** (`agents/risk_assessor.py`): scores 0–10 with a rationale;
+- **Risk assessor** (`backend/app/agents/risk_assessor.py`, Rust: `crates/core/src/agents/risk.rs`): scores 0–10 with a rationale;
   low-confidence findings are penalized so the dashboard sorts by real risk.
-- **Sandbox** (`sandbox/runner.py`): synthesizes a per-rule PoC and executes it
+- **Sandbox** (`backend/app/sandbox/runner.py`, Rust: `crates/core/src/sandbox/`): synthesizes a per-rule PoC and executes it
   isolated (Docker `--network none` preferred, subprocess fallback). PoCs prove
   sink reachability with markers — never real exploitation.
-- **Validator** (`agents/validator.py`): combines code context with the repro
+- **Validator** (`backend/app/agents/validator.py`, Rust: `crates/core/src/agents/validator.rs`): combines code context with the repro
   log to label true vs false positives before patching.
-- **Patcher** (`patcher/`): LLM proposes the minimal fix; a deterministic
-  fixer guarantees a safe, reviewable diff offline (parameterize hint,
+- **Patcher** (`backend/app/patcher/`, Rust: `crates/core/src/patcher/`): deterministic per-rule transforms produce the minimal fix; a syntax
+  gate guarantees a safe, reviewable diff offline (parameterize,
   `shell=False`, `safe_load`, env secrets, path confinement, escaping).
-- **Verifier** (`verifier/`): applies the diff, re-scans the sink region,
+- **Verifier** (`backend/app/verifier/`, Rust: `crates/core/src/verifier/`): applies the diff, re-scans the sink region,
   runs the target repo's pytest suite if present, and records
   `fixed | unfixed | inconclusive` with logs.
 

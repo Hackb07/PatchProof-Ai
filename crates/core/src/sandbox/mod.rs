@@ -4,7 +4,7 @@
 //! For each finding, a small PoC script demonstrates the dangerous sink is
 //! reachable, executed in an isolated backend: a Docker container when
 //! available, else a timeout-bounded local subprocess with no network.
-//! Command-injection PoCs run `echo` markers only.
+//! Command-injection PoCs run fixed print markers only (no shell).
 
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ use crate::store::Store;
 use crate::truncate_chars;
 
 pub const POC_SQLI: &str = "query = f\"SELECT * FROM users WHERE name = '{{payload}}'\"\nprint('POC-SQLI: query built:', query)\nassert \"' OR '1'='1\" in query\nprint('POC-SQLI: REPRODUCED - injection string reaches SQL')\n";
-pub const POC_CMDI: &str = "import subprocess\npayload = \"hello; echo POC-CMDI-MARKER\"\nprint('POC-CMDI: payload reaches shell sink:', payload)\n# Safe: only echo, never executes the injected part\nr = subprocess.run(['echo', 'POC-CMDI-MARKER'], capture_output=True, text=True, timeout=5)\nassert 'POC-CMDI-MARKER' in r.stdout\nprint('POC-CMDI: REPRODUCED - sink reachable (simulated safely)')\n";
+pub const POC_CMDI: &str = "import subprocess, sys\npayload = \"hello; echo POC-CMDI-MARKER\"\nprint('POC-CMDI: payload reaches shell sink:', payload)\n# Safe: fixed print only, never executes the injected part (no shell, no echo binary)\nr = subprocess.run([sys.executable, '-c', \"print('POC-CMDI-MARKER')\"], capture_output=True, text=True, timeout=5)\nassert 'POC-CMDI-MARKER' in r.stdout\nprint('POC-CMDI: REPRODUCED - sink reachable (simulated safely)')\n";
 pub const POC_XSS: &str = "payload = \"<script>alert(1)</script>\"\nrendered = f\"<div>{payload}</div>\"\nprint('POC-XSS: rendered:', rendered)\nassert '<script>' in rendered\nprint('POC-XSS: REPRODUCED - unescaped script reaches output')\n";
 pub const POC_PATHTRAV: &str = "from pathlib import Path\npayload = \"../../etc/passwd\"\nresolved = (Path('/srv/app/data') / payload).resolve()\nprint('POC-PATHTRAV: resolved:', resolved)\nassert str(resolved).startswith('/etc') or '..' in payload\nprint('POC-PATHTRAV: REPRODUCED - traversal escapes base dir')\n";
 pub const POC_DESER: &str = "import pickle\npayload = pickle.dumps({'role': 'admin'})\nobj = pickle.loads(payload)\nprint('POC-DESER: decoded:', obj)\nassert obj['role'] == 'admin'\nprint('POC-DESER: REPRODUCED - pickle sink decodes untrusted bytes')\n";
@@ -38,11 +38,7 @@ pub fn poc_template(rule_id: &str) -> &'static str {
 }
 
 /// Reproduce every non-false-positive finding of a scan.
-pub async fn reproduce(
-    store: &Store,
-    settings: &Settings,
-    scan_id: &str,
-) -> Result<Vec<Finding>> {
+pub async fn reproduce(store: &Store, settings: &Settings, scan_id: &str) -> Result<Vec<Finding>> {
     let findings = store.list_active_findings(scan_id)?;
     let backend = pick_backend(settings).await;
     let mut reproduced_count = 0;
@@ -90,14 +86,21 @@ async fn pick_backend(settings: &Settings) -> String {
     "subprocess".to_string()
 }
 
-async fn docker_alive() -> bool {
-    let fut = tokio::process::Command::new("docker")
-        .arg("info")
-        .output();
+pub async fn docker_alive() -> bool {
+    let fut = tokio::process::Command::new("docker").arg("info").output();
     match tokio::time::timeout(Duration::from_secs(10), fut).await {
         Ok(Ok(out)) => out.status.success(),
         _ => false,
     }
+}
+
+/// `host-path:/work:<mode>` bind-mount argument (Docker expects forward
+/// slashes in the source, even on Windows).
+pub fn docker_mount_arg(host_path: &std::path::Path, mode: &str) -> String {
+    let mount_src = host_path.to_string_lossy();
+    #[cfg(windows)]
+    let mount_src = mount_src.replace('\\', "/");
+    format!("{mount_src}:/work:{mode}")
 }
 
 async fn run_poc(code: &str, backend: &str, settings: &Settings) -> (String, bool) {
@@ -128,7 +131,8 @@ async fn run_subprocess(code: &str, settings: &Settings) -> (String, bool) {
     }
     let Some(python) = find_python() else {
         return (
-            "[error] no python interpreter found (tried python3, python)".to_string(),
+            "[error] no working python interpreter found (need Python 3.11+; set PYTHON= to override)"
+                .to_string(),
             false,
         );
     };
@@ -136,16 +140,19 @@ async fn run_subprocess(code: &str, settings: &Settings) -> (String, bool) {
         .arg(&script)
         .current_dir(tmp.path())
         .output();
-    let output = match tokio::time::timeout(
-        Duration::from_secs(settings.sandbox_timeout_s.max(1)),
-        fut,
-    )
-    .await
-    {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => return (format!("[error] {e}"), false),
-        Err(_) => return ("[timeout] PoC exceeded sandbox time limit".to_string(), false),
-    };
+    let output =
+        match tokio::time::timeout(Duration::from_secs(settings.sandbox_timeout_s.max(1)), fut)
+            .await
+        {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => return (format!("[error] {e}"), false),
+            Err(_) => {
+                return (
+                    "[timeout] PoC exceeded sandbox time limit".to_string(),
+                    false,
+                )
+            }
+        };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let code_status = output.status.code().unwrap_or(-1);
@@ -160,7 +167,7 @@ async fn run_docker(
 ) -> std::result::Result<(String, bool), String> {
     let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
     std::fs::write(tmp.path().join("poc.py"), code).map_err(|e| e.to_string())?;
-    let mount = format!("{}:/work:ro", tmp.path().to_string_lossy());
+    let mount = docker_mount_arg(tmp.path(), "ro");
     let fut = tokio::process::Command::new("docker")
         .args([
             "run",
@@ -173,7 +180,7 @@ async fn run_docker(
             "0.5",
             "-v",
             &mount,
-            "python:3.12-slim",
+            &settings.sandbox_image,
             "python",
             "/work/poc.py",
         ])
@@ -194,9 +201,13 @@ async fn run_docker(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let code_status = output.status.code().unwrap_or(-1);
     let log = format!(
-        "$ docker run --rm --network none python:3.12-slim python /work/poc.py\n{stdout}{stderr}\n[exit={code_status}]"
+        "$ docker run --rm --network none {} python /work/poc.py\n{stdout}{stderr}\n[exit={code_status}]",
+        settings.sandbox_image
     );
-    Ok((log, output.status.success() && stdout.contains("REPRODUCED")))
+    Ok((
+        log,
+        output.status.success() && stdout.contains("REPRODUCED"),
+    ))
 }
 
 /// Search `PATH` for an executable (mirrors `shutil.which`).
@@ -218,12 +229,15 @@ pub fn which_bin(name: &str) -> bool {
     false
 }
 
-/// Locate a Python interpreter for PoCs, syntax gates, and repo tests.
+/// Locate a working Python interpreter (>= 3.11) for PoCs, syntax gates,
+/// and repo tests. Candidates that fail to run (e.g. the Windows Store
+/// redirect stub) are skipped, so callers only ever see a runnable
+/// interpreter or `None`.
 pub fn find_python() -> Option<String> {
     if let Ok(explicit) = std::env::var("PYTHON") {
         let explicit = explicit.trim().to_string();
         if !explicit.is_empty() {
-            return Some(explicit);
+            return python_works(&explicit).then_some(explicit);
         }
     }
     #[cfg(windows)]
@@ -232,6 +246,22 @@ pub fn find_python() -> Option<String> {
     let candidates = ["python3", "python"];
     candidates
         .into_iter()
-        .find(|c| which_bin(c))
+        .filter(|c| which_bin(c))
+        .find(|c| python_works(c))
         .map(|s| s.to_string())
+}
+
+/// True when `candidate` executes and reports Python >= 3.11.
+fn python_works(candidate: &str) -> bool {
+    std::process::Command::new(candidate)
+        .args([
+            "-c",
+            "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }

@@ -11,8 +11,9 @@ echo "API: $API"
 curl -sf "$API/api/health" | python3 -m json.tool
 
 echo "-- submitting scan for $FIXTURE"
+PAYLOAD=$(FIXTURE="$FIXTURE" python3 -c 'import json,os; print(json.dumps({"repo_url": os.environ["FIXTURE"]}))')
 SCAN_ID=$(curl -sf -X POST "$API/api/scans" -H 'Content-Type: application/json' \
-  -d "{\"repo_url\": \"$FIXTURE\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+  -d "$PAYLOAD" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 echo "scan id: $SCAN_ID"
 
 for _ in $(seq 1 40); do

@@ -1,20 +1,21 @@
-.PHONY: install api web test demo-scan lock
+.PHONY: build api web test lint demo-scan
 
-install:
-	uv sync
-
-lock:
-	uv lock
+build:
+	cargo build --workspace
 
 api:
-	uv run uvicorn app.main:app --app-dir backend --reload --port 8000
+	cargo run -p patchproof-api
 
 web:
 	npm --prefix frontend install
 	npm --prefix frontend run dev
 
 test:
-	uv run pytest backend/tests -q
+	cargo test --workspace
+
+lint:
+	cargo fmt --all --check
+	cargo clippy --workspace --all-targets -- -D warnings
 
 demo-scan:
 	curl -s -X POST localhost:8000/api/scans -H 'Content-Type: application/json' \

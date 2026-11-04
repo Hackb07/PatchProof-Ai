@@ -20,7 +20,12 @@ _SECRET_RE = re.compile(
     r"""(?i)\b(api[_-]?key|secret|password|passwd|pwd|token|aws_access|aws_secret|private[_-]?key)\b\s*[:=]\s*['\"][^'"]{4,}['\"]"""
 )
 _FSTRING_SQL_RE = re.compile(r"""(?i)\b(SELECT|INSERT|UPDATE|DELETE)\b.*\{""")
-_FORMAT_SQL_RE = re.compile(r"""(?i)\b(SELECT|INSERT|UPDATE|DELETE)\b.*(\.format\(|%\s)""")
+_FORMAT_SQL_RE = re.compile(r"""(?i)\b(SELECT|INSERT|UPDATE|DELETE)\b.*(\.format\(|%)""")
+_SHELL_TRUE_RE = re.compile(r"""\bshell\s*=\s*true\b""")
+_EXEC_FAMILY = {
+    "execl", "execle", "execlp", "execv", "execve", "execvp",
+    "spawnl", "spawnlp", "spawnv", "spawnvp", "posix_spawn",
+}
 
 
 def _lines(source: str) -> list[str]:
@@ -46,15 +51,55 @@ def _mk(rule_id: str, lineno: int, lines: list[str], explanation: str, confidenc
     }
 
 
+def _has_name(node: ast.AST) -> bool:
+    """True when the expression mentions a variable, call, subscript,
+    attribute, or interpolation (i.e. it is not a pure constant)."""
+    return any(
+        isinstance(n, (ast.Name, ast.Call, ast.Subscript, ast.Attribute, ast.JoinedStr))
+        for n in ast.walk(node)
+    )
+
+
+def _is_constant(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant)
+
+
 def _is_tainted_string(node: ast.AST) -> bool:
-    """Heuristic: f-string, .format(), %-format, or BinOp + with a Name inside."""
+    """Heuristic: f-string, .format(), %-format, or + applied to a
+    non-constant expression, or a call (e.g. os.path.join) over tainted
+    arguments. Pure constants such as "a" + "b" are not tainted."""
     if isinstance(node, ast.JoinedStr):
         return True
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
         return True
     if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Mod, ast.Add)):
-        return True
+        return _has_name(node)
+    if isinstance(node, ast.Call):
+        if _is_sanitizer_call(node):
+            return False
+        args = list(node.args) + [kw.value for kw in node.keywords]
+        return any(_has_name(a) for a in args)
     return False
+
+
+def _strip_comment(line: str) -> str:
+    """Cut a trailing `#` comment, ignoring `#` inside string literals."""
+    quote = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote is not None:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "#":
+            return line[:i]
+        i += 1
+    return line
 
 
 def _call_name(node: ast.Call) -> str:
@@ -66,7 +111,7 @@ def _call_name(node: ast.Call) -> str:
     return ""
 
 
-_SANITIZER_HINTS = ("check", "allow", "valid", "sanit", "escape", "clean", "safe")
+_SANITIZER_HINTS = ("check", "allow", "valid", "sanit", "escape", "clean", "safe", "confin")
 
 
 def _is_sanitizer_call(node: ast.AST) -> bool:
@@ -138,12 +183,19 @@ def scan_source(source: str, filename: str = "<memory>") -> list[dict]:
                 # eval/exec reported under deserialization-adjacent code execution; keep as CMDI-adjacent high
                 findings.append(_mk("PY-CMDI-001", lineno, lines,
                                     "Dynamic code execution via eval/exec on possibly untrusted input.", "high"))
+            if name in _EXEC_FAMILY:
+                findings.append(_mk("PY-CMDI-001", lineno, lines,
+                                    "Process execution via os.exec/spawn; attacker input may inject commands.", "medium"))
             # SSRF: requests.* with tainted URL
             if mod == "requests" and name in {"get", "post", "put", "delete", "head", "request"}:
-                if node.args and _is_tainted_string(node.args[0]):
+                if node.args and _is_sanitizer_call(node.args[0]):
+                    pass  # hardened shape such as requests.get(_checked_url(url))
+                elif node.args and _is_tainted_string(node.args[0]):
                     findings.append(_mk("PY-SSRF-001", lineno, lines,
                                         "HTTP request URL built from input; validate against an allowlist.", "medium"))
-                elif node.args and not _is_sanitizer_call(node.args[0]):
+                elif node.args and _is_constant(node.args[0]):
+                    pass  # fully constant URL: no attacker input
+                elif node.args:
                     findings.append(_mk("PY-SSRF-001", lineno, lines,
                                         "HTTP request to a variable URL; confirm the host is allowlisted.", "low"))
 
@@ -154,9 +206,12 @@ def scan_source(source: str, filename: str = "<memory>") -> list[dict]:
 def _regex_detectors(source: str, lines: list[str]) -> list[dict]:
     out: list[dict] = []
     for i, line in enumerate(lines, start=1):
-        if _SECRET_RE.search(line):
+        if line.lstrip().startswith("#"):
+            continue
+        code = _strip_comment(line)
+        if _SECRET_RE.search(code):
             out.append(_mk("PY-SECRET-001", i, lines, "Credential-like value hardcoded in source; move to env/secret store."))
-        if _FSTRING_SQL_RE.search(line) or _FORMAT_SQL_RE.search(line):
+        if _FSTRING_SQL_RE.search(code) or _FORMAT_SQL_RE.search(code):
             out.append(_mk("PY-SQLI-001", i, lines, "SQL keyword combined with string interpolation.", "medium"))
     # eval/exec fallback for odd parse shapes is covered by AST; keep secrets+SQL here.
     del source
@@ -166,8 +221,10 @@ def _regex_detectors(source: str, lines: list[str]) -> list[dict]:
 def _regex_fallback(source: str, lines: list[str]) -> list[dict]:
     out = _regex_detectors(source, lines)
     for i, line in enumerate(lines, start=1):
-        low = line.lower()
-        if "shell=true" in low:
+        if line.lstrip().startswith("#"):
+            continue
+        low = _strip_comment(line).lower()
+        if _SHELL_TRUE_RE.search(low):
             out.append(_mk("PY-CMDI-001", i, lines, "subprocess with shell=True (regex fallback)."))
         if "pickle.loads" in low or "pickle.load" in low:
             out.append(_mk("PY-DESER-001", i, lines, "pickle deserialization (regex fallback)."))

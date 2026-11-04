@@ -15,6 +15,10 @@ def scan_repo(session: Session, scan_id: str, repo_path: str) -> list[Finding]:
     for path in sorted(root.rglob("*.py")):
         if any(part in SKIP_DIRS for part in path.parts):
             continue
+        # Never follow symlinks out of the checkout: a hostile repo could
+        # otherwise link `evil.py` at a host file outside it.
+        if path.is_symlink():
+            continue
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError:

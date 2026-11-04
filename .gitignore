@@ -2,10 +2,11 @@
 __pycache__/
 *.pyc
 *.db
+*.db-wal
+*.db-shm
 node_modules/
 frontend/dist/
 patchproof.db
-/tmp/patchproof/
 .env
 /target/
 /.toolchain/

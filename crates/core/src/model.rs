@@ -18,7 +18,7 @@ pub struct Scan {
     pub id: String,
     pub repo_url: String,
     pub branch: String,
-    /// queued|scanning|triaging|patching|verifying|done|failed
+    /// queued|scanning|triaging|patching|verifying|done|failed|cancelled
     pub status: String,
     pub created_at: String,
     pub finished_at: Option<String>,

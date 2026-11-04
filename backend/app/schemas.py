@@ -1,4 +1,6 @@
 """Pydantic response/request schemas."""
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -58,5 +60,21 @@ class ScanOut(BaseModel):
     branch: str
     status: str
     error: str
+    created_at: datetime | None = None
+    finished_at: datetime | None = None
     findings: list[FindingOut] = []
     evidence: list[EvidenceOut] = []
+
+
+class ScanSummary(BaseModel):
+    """Lightweight list entry: counts only, no findings."""
+
+    id: str
+    repo_url: str
+    branch: str
+    status: str
+    error: str
+    created_at: datetime | None = None
+    finished_at: datetime | None = None
+    finding_count: int = 0
+    evidence_count: int = 0

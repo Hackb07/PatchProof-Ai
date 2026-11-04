@@ -42,7 +42,7 @@ def test_deser_positive_and_negative():
 
 
 def test_secret_positive_and_negative():
-    vuln = 'API_KEY = "sk-live-abcdef123456"\n'
+    vuln = 'API_KEY = "[REDACTED]"\n'
     assert "PY-SECRET-001" in _ids(vuln)
     safe = 'import os\nAPI_KEY = os.environ["API_KEY"]\n'
     assert "PY-SECRET-001" not in _ids(safe)
@@ -53,6 +53,41 @@ def test_ssrf_positive_and_negative():
     assert "PY-SSRF-001" in _ids(vuln)
     safe = 'ALLOWED = {"api.example.com"}\n'
     assert "PY-SSRF-001" not in _ids(safe)
+
+
+def test_constant_url_not_flagged_but_variable_is():
+    assert "PY-SSRF-001" not in _ids('import requests\nrequests.get("https://example.com")\n')
+    assert "PY-SSRF-001" in _ids('import requests\nrequests.get(url, timeout=5)\n')
+
+
+def test_bare_shell_true_not_flagged():
+    assert "PY-CMDI-001" not in _ids("my_shell = True\n")
+    assert "PY-CMDI-001" not in _ids("x = 1  # shell=True\n")
+
+
+def test_constant_binop_not_tainted():
+    assert "PY-PATHTRAV-001" not in _ids('open("a" + "b")\n')
+    assert "PY-SQLI-001" not in _ids('cursor.execute("SELECT " + "FROM x")\n')
+    assert "PY-PATHTRAV-001" in _ids('open("/srv/" + filename)\n')
+
+
+def test_path_join_shapes_flagged():
+    assert "PY-PATHTRAV-001" in _ids('open(os.path.join(base, name))\n')
+    assert "PY-PATHTRAV-001" not in _ids('open("/srv/data/static.txt")\n')
+
+
+def test_percent_format_without_space_flagged():
+    assert "PY-SQLI-001" in _ids('q = "SELECT * FROM t WHERE a=%s" % (v,)\n')
+
+
+def test_exec_family_flagged():
+    assert "PY-CMDI-001" in _ids('import os\nos.execv(path, args)\n')
+
+
+def test_comment_secret_not_flagged():
+    assert "PY-SECRET-001" not in _ids('# password = "hunter2super"\n')
+    assert "PY-SECRET-001" not in _ids('x = 1  # password = "hunter2super"\n')
+    assert "PY-SECRET-001" in _ids('password = "hunter2super"  # rotate me\n')
 
 
 def test_patched_shapes_rescan_clean():

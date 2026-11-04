@@ -99,3 +99,65 @@ fn test_patched_shapes_rescan_clean() {
         assert!(!ids(source).contains(rule_id), "{rule_id}");
     }
 }
+
+#[test]
+fn test_constant_url_not_flagged_but_variable_is() {
+    let constant = "import requests\nrequests.get(\"https://example.com\")\n";
+    assert!(!ids(constant).contains("PY-SSRF-001"));
+    let variable = "import requests\nrequests.get(url, timeout=5)\n";
+    assert!(ids(variable).contains("PY-SSRF-001"));
+}
+
+#[test]
+fn test_bare_shell_true_not_flagged() {
+    assert!(!ids("my_shell=True\n").contains("PY-CMDI-001"));
+    assert!(!ids("x = 1  # shell=True\n").contains("PY-CMDI-001"));
+    // ... but from-imported subprocess calls still are.
+    let vuln = "from subprocess import run\nrun(cmd, shell=True)\n";
+    assert!(ids(vuln).contains("PY-CMDI-001"));
+}
+
+#[test]
+fn test_constant_binop_not_tainted() {
+    assert!(!ids("open(\"a\" + \"b\")\n").contains("PY-PATHTRAV-001"));
+    assert!(!ids("cursor.execute(\"SELECT \" + \"FROM x\")\n").contains("PY-SQLI-001"));
+    let vuln = "open(\"/srv/\" + filename)\n";
+    assert!(ids(vuln).contains("PY-PATHTRAV-001"));
+}
+
+#[test]
+fn test_path_join_shapes_flagged() {
+    assert!(ids("open(os.path.join(base, name))\n").contains("PY-PATHTRAV-001"));
+    assert!(ids("open(Path(base) / name)\n").contains("PY-PATHTRAV-001"));
+    assert!(!ids("open(\"/srv/data/static.txt\")\n").contains("PY-PATHTRAV-001"));
+}
+
+#[test]
+fn test_percent_format_without_space_flagged() {
+    let vuln = "q = \"SELECT * FROM t WHERE a=%s\" % (v,)\n";
+    assert!(ids(vuln).contains("PY-SQLI-001"));
+}
+
+#[test]
+fn test_exec_family_flagged() {
+    assert!(ids("import os\nos.execv(path, args)\n").contains("PY-CMDI-001"));
+    assert!(ids("import os\nos.execl(p, a)\n").contains("PY-CMDI-001"));
+}
+
+#[test]
+fn test_trailing_comment_secret_not_flagged() {
+    let code = "x = 1  # password = \"hunter2super\"\n";
+    assert!(!ids(code).contains("PY-SECRET-001"));
+    let real = "password = \"hunter2super\"  # rotate me\n";
+    assert!(ids(real).contains("PY-SECRET-001"));
+}
+
+#[test]
+fn test_full_line_comments_never_flagged() {
+    // Advisory comments (e.g. the patcher's own hints) mention sinks by
+    // name; like the Python AST walker, the scanner must ignore them.
+    let comment = "# PatchProof fix (PY-CMDI-001): Use subprocess.run([...], shell=False) with an argv list; never shell=True with input.\n";
+    assert!(scan_source(comment).is_empty());
+    let xss = "# avoid render_template_string with input\n";
+    assert!(scan_source(xss).is_empty());
+}

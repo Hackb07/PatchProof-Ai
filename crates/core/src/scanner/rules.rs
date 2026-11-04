@@ -8,6 +8,9 @@
 //!
 //! Known approximation: multi-line calls are attributed to the line carrying
 //! the tell-tale token (e.g. `shell=True`) rather than the call's first line.
+//! Full-line comments are skipped (the Python AST walker never sees them),
+//! and trailing `#` comments are stripped before matching, so advisory
+//! comments can never self-trigger a rule.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -39,7 +42,12 @@ pub fn rule_meta(rule_id: &str) -> Option<(&'static str, &'static str, &'static 
 /// Ordered rule metadata for iteration.
 pub const RULE_META: &[(&str, &str, &str, &str)] = &[
     ("PY-SQLI-001", "Possible SQL injection", "CWE-89", "high"),
-    ("PY-CMDI-001", "Possible command injection", "CWE-78", "high"),
+    (
+        "PY-CMDI-001",
+        "Possible command injection",
+        "CWE-78",
+        "high",
+    ),
     (
         "PY-XSS-001",
         "Possible cross-site scripting / unsafe template render",
@@ -52,7 +60,12 @@ pub const RULE_META: &[(&str, &str, &str, &str)] = &[
         "CWE-22",
         "medium",
     ),
-    ("PY-DESER-001", "Insecure deserialization", "CWE-502", "high"),
+    (
+        "PY-DESER-001",
+        "Insecure deserialization",
+        "CWE-502",
+        "high",
+    ),
     ("PY-SECRET-001", "Hardcoded secret", "CWE-798", "medium"),
     (
         "PY-SSRF-001",
@@ -88,19 +101,30 @@ static_re!(
     secret_re,
     r#"(?i)\b(api[_-]?key|secret|password|passwd|pwd|token|aws_access|aws_secret|private[_-]?key)\b\s*[:=]\s*['"][^'"]{4,}['"]"#
 );
-static_re!(fstring_sql_re, r#"(?i)\b(SELECT|INSERT|UPDATE|DELETE)\b.*\{"#);
+static_re!(
+    fstring_sql_re,
+    r#"(?i)\b(SELECT|INSERT|UPDATE|DELETE)\b.*\{"#
+);
 static_re!(
     format_sql_re,
-    r#"(?i)\b(SELECT|INSERT|UPDATE|DELETE)\b.*(\.format\(|%\s)"#
+    r#"(?i)\b(SELECT|INSERT|UPDATE|DELETE)\b.*(\.format\(|%)"#
 );
 static_re!(
     execute_call_re,
     r#"\bexecutemany\s*\(|\bexecutescript\s*\(|\bexecute\s*\("#
 );
 static_re!(system_popen_re, r#"\b(system|popen)\s*\("#);
-static_re!(shell_true_re, r#"(?i)shell\s*=\s*True\b"#);
+static_re!(shell_true_re, r#"(?i)\bshell\s*=\s*True\b"#);
+static_re!(
+    subprocess_call_re,
+    r#"\b(Popen|run|call|check_output|check_call|system|popen)\s*\("#
+);
 static_re!(eval_re, r#"\beval\s*\("#);
 static_re!(exec_re, r#"\bexec\s*\("#);
+static_re!(
+    exec_family_re,
+    r#"\b(os\.)?(execl|execle|execlp|execv|execve|execvp|spawnl|spawnlp|spawnv|spawnvp|posix_spawn)\s*\("#
+);
 static_re!(render_call_re, r#"\brender_template_string\s*\("#);
 static_re!(markup_call_re, r#"\bMarkup\s*\("#);
 static_re!(open_call_re, r#"\bopen\s*\("#);
@@ -138,8 +162,15 @@ pub fn scan_source(source: &str) -> Vec<RawFinding> {
 }
 
 fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding>) {
+    if line.trim_start().starts_with('#') {
+        return;
+    }
+    // Match against code only: a trailing `#` comment must never trigger a
+    // rule (e.g. `x = 1  # shell=True`).
+    let code = strip_line_comment(line);
+    let code = code.as_str();
     // SQL injection: execute-family with tainted input.
-    if execute_call_re().is_match(line) && is_tainted_call_arg(line) {
+    if execute_call_re().is_match(code) && is_tainted_call_arg(code) {
         out.push(mk(
             "PY-SQLI-001",
             lineno,
@@ -149,7 +180,7 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
         ));
     }
     // Command injection: os.system / os.popen / bare system / popen.
-    if system_popen_re().is_match(line) {
+    if system_popen_re().is_match(code) {
         out.push(mk(
             "PY-CMDI-001",
             lineno,
@@ -158,29 +189,23 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
             "medium",
         ));
     }
-    // Command injection: shell=True (subprocess or fallback).
-    if shell_true_re().is_match(line) {
-        if line.contains("subprocess") {
-            out.push(mk(
-                "PY-CMDI-001",
-                lineno,
-                lines,
-                "subprocess called with shell=True; prefer argv list with shell=False.",
-                "high",
-            ));
-        } else {
-            out.push(mk(
-                "PY-CMDI-001",
-                lineno,
-                lines,
-                "subprocess with shell=True (regex fallback).",
-                "medium",
-            ));
-        }
+    // Command injection: shell=True on a subprocess-shaped call. A bare
+    // `shell=True` with no call on the line (config flag, comment text) is
+    // not a sink.
+    if shell_true_re().is_match(code)
+        && (code.contains("subprocess") || subprocess_call_re().is_match(code))
+    {
+        out.push(mk(
+            "PY-CMDI-001",
+            lineno,
+            lines,
+            "subprocess called with shell=True; prefer argv list with shell=False.",
+            "high",
+        ));
     }
     // XSS: unescaped template rendering.
-    if (render_call_re().is_match(line) || markup_call_re().is_match(line))
-        && !line.contains("escape")
+    if (render_call_re().is_match(code) || markup_call_re().is_match(code))
+        && !code.contains("escape")
     {
         out.push(mk(
             "PY-XSS-001",
@@ -191,7 +216,7 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
         ));
     }
     // Path traversal: open() with tainted path.
-    if open_call_re().is_match(line) && is_tainted_call_arg(line) {
+    if open_call_re().is_match(code) && (is_tainted_call_arg(code) || is_path_join_arg(code)) {
         out.push(mk(
             "PY-PATHTRAV-001",
             lineno,
@@ -201,7 +226,7 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
         ));
     }
     // Insecure deserialization: pickle / yaml.load.
-    if pickle_call_re().is_match(line) {
+    if pickle_call_re().is_match(code) {
         out.push(mk(
             "PY-DESER-001",
             lineno,
@@ -210,7 +235,7 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
             "high",
         ));
     }
-    if yaml_load_re().is_match(line) && !line.contains("Loader") {
+    if yaml_load_re().is_match(code) && !code.contains("Loader") {
         out.push(mk(
             "PY-DESER-001",
             lineno,
@@ -219,8 +244,8 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
             "high",
         ));
     }
-    // Dynamic code execution.
-    if eval_re().is_match(line) || exec_re().is_match(line) {
+    // Dynamic code execution: eval/exec plus the os.exec/spawn family.
+    if eval_re().is_match(code) || exec_re().is_match(code) {
         out.push(mk(
             "PY-CMDI-001",
             lineno,
@@ -229,11 +254,21 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
             "high",
         ));
     }
-    // SSRF: requests.* with tainted or variable URL.
-    if requests_call_re().is_match(line) {
-        if is_sanitizer_first_arg(line) {
+    if exec_family_re().is_match(code) {
+        out.push(mk(
+            "PY-CMDI-001",
+            lineno,
+            lines,
+            "Process execution via os.exec/spawn; attacker input may inject commands.",
+            "medium",
+        ));
+    }
+    // SSRF: requests.* with tainted or variable URL. Fully constant URLs
+    // carry no attacker input and are not flagged.
+    if requests_call_re().is_match(code) {
+        if is_sanitizer_first_arg(code) {
             // Hardened shape such as requests.get(_checked_url(url)).
-        } else if is_tainted_call_arg(line) {
+        } else if is_tainted_call_arg(code) {
             out.push(mk(
                 "PY-SSRF-001",
                 lineno,
@@ -241,7 +276,7 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
                 "HTTP request URL built from input; validate against an allowlist.",
                 "medium",
             ));
-        } else {
+        } else if !is_constant_first_arg(code) {
             out.push(mk(
                 "PY-SSRF-001",
                 lineno,
@@ -252,7 +287,7 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
         }
     }
     // Regex detectors: secrets and SQL keyword + interpolation.
-    if secret_re().is_match(line) {
+    if secret_re().is_match(code) {
         out.push(mk(
             "PY-SECRET-001",
             lineno,
@@ -261,7 +296,7 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
             "medium",
         ));
     }
-    if fstring_sql_re().is_match(line) || format_sql_re().is_match(line) {
+    if fstring_sql_re().is_match(code) || format_sql_re().is_match(code) {
         out.push(mk(
             "PY-SQLI-001",
             lineno,
@@ -272,8 +307,10 @@ fn scan_line(line: &str, lineno: usize, lines: &[&str], out: &mut Vec<RawFinding
     }
 }
 
-/// Heuristic taint: f-string, `.format(`, or `%`/`+` formatting inside the
-/// first call argument (ports `_is_tainted_string` for single-line sinks).
+/// Heuristic taint: f-string, `.format(`, or `%`/`+` formatting applied to a
+/// non-constant expression inside the first call argument (ports
+/// `_is_tainted_string` for single-line sinks). Pure-constant expressions
+/// such as `"a" + "b"` or `100 % 3` are not tainted.
 fn is_tainted_call_arg(line: &str) -> bool {
     if line.contains("f\"") || line.contains("f'") || line.contains("F\"") || line.contains("F'") {
         return true;
@@ -281,8 +318,97 @@ fn is_tainted_call_arg(line: &str) -> bool {
     if line.contains(".format(") {
         return true;
     }
-    let region = first_arg_region(line);
-    region.contains('%') || region.contains('+')
+    let stripped = strip_string_literals(first_arg_region(line));
+    let has_op = stripped.contains('%') || stripped.contains('+');
+    has_op
+        && stripped
+            .chars()
+            .any(|c| c.is_ascii_alphabetic() || c == '_')
+}
+
+/// Path-join shapes the generic taint check misses: `os.path.join(...)`
+/// and `Path(...) / name` compositions inside the first argument.
+fn is_path_join_arg(line: &str) -> bool {
+    let stripped = strip_string_literals(first_arg_region(line));
+    if stripped.contains("join(") {
+        return true;
+    }
+    stripped.contains('/')
+        && stripped
+            .chars()
+            .any(|c| c.is_ascii_alphabetic() || c == '_')
+}
+
+/// True when the first call argument is a plain string constant.
+fn is_constant_first_arg(line: &str) -> bool {
+    matches!(
+        first_arg_region(line).trim_start().chars().next(),
+        Some('"') | Some('\'')
+    )
+}
+
+/// Remove string-literal contents (quote-aware, single line) so operator
+/// checks only see code.
+fn strip_string_literals(region: &str) -> String {
+    let mut out = String::with_capacity(region.len());
+    let chars: Vec<char> = region.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '"' || c == '\'' {
+            let triple = i + 2 < chars.len() && chars[i + 1] == c && chars[i + 2] == c;
+            i += if triple { 3 } else { 1 };
+            while i < chars.len() {
+                if triple {
+                    if i + 2 < chars.len()
+                        && chars[i] == c
+                        && chars[i + 1] == c
+                        && chars[i + 2] == c
+                    {
+                        i += 3;
+                        break;
+                    }
+                    i += 1;
+                } else if chars[i] == '\\' {
+                    i += 2;
+                } else if chars[i] == c {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Cut a trailing `#` comment, ignoring `#` inside string literals.
+fn strip_line_comment(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == q {
+                quote = None;
+            }
+        } else if b == b'"' || b == b'\'' {
+            quote = Some(b);
+        } else if b == b'#' {
+            return line[..i].to_string();
+        }
+        i += 1;
+    }
+    line.to_string()
 }
 
 /// Text between the first `(` and the first top-level `,` or closing `)`.
@@ -299,12 +425,12 @@ fn first_arg_region(line: &str) -> &str {
             b')' => {
                 depth -= 1;
                 if depth == 0 {
-                    end = *i;
+                    end = i;
                     break;
                 }
             }
             b',' if depth == 1 => {
-                end = *i;
+                end = i;
                 break;
             }
             _ => {}

@@ -1,0 +1,129 @@
+#!/usr/bin/env node
+import { createInterface } from 'node:readline/promises'
+import { stdin, stdout } from 'node:process'
+import { writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
+const api = (process.env.PATCHPROOF_API || 'http://127.0.0.1:8000').replace(/\/$/, '')
+const key = process.env.PATCHPROOF_API_KEY || ''
+const terminal = createInterface({ input: stdin, output: stdout })
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
+
+function redact(value) {
+  return String(value ?? '')
+    .replace(/(https?:\/\/)[^/@\s]+@/gi, '$1[REDACTED]@')
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b/g, '[REDACTED]')
+    .replace(/(api[_-]?key|secret|password|token|authorization)(\s*[:=]\s*)(["']?)[^\s"'`,;]+/gi, '$1$2[REDACTED]')
+}
+
+async function request(path, { method = 'GET', body } = {}) {
+  const response = await fetch(`${api}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(key ? { 'X-API-Key': key } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(35_000),
+  })
+  const text = await response.text()
+  if (!response.ok) throw new Error(`${response.status}: ${text}`)
+  return text ? JSON.parse(text) : {}
+}
+
+function printScan(scan) {
+  const findings = scan.findings || []
+  console.log(`\n${scan.id} · ${scan.status} · ${redact(scan.repo_url)} · ${findings.length} finding(s)`)
+  findings.forEach((finding, index) => {
+    const patch = finding.patches?.[0]
+    const verified = patch?.verifications?.at(-1)?.status || 'not verified'
+    console.log(`${String(index + 1).padStart(2)}. ${(finding.severity || '?').toUpperCase().padEnd(8)} risk ${(finding.risk_score ?? 0).toFixed(1)} · ${redact(finding.title)} (${finding.cwe || 'n/a'})`)
+    console.log(`    ${redact(finding.file_path)}:${finding.line_no} · reproduced: ${Boolean(finding.reproduced)} · fix: ${verified}`)
+  })
+}
+
+function makeReport(scan) {
+  const findings = scan.findings || []
+  const fixed = findings.filter((f) => f.patches?.some((p) => p.verifications?.some((v) => v.status === 'fixed'))).length
+  const lines = [
+    '# PatchProof security report', '',
+    `- Repository: ${redact(scan.repo_url)}`, `- Branch: ${redact(scan.branch || 'HEAD')}`,
+    `- Scan: ${scan.id}`, `- Status: ${scan.status}`, `- Findings: ${findings.length} (${fixed} verified fixed)`, '',
+    '## Findings', '',
+  ]
+  if (!findings.length) lines.push('No findings were recorded.', '')
+  for (const f of findings) {
+    const patch = f.patches?.[0]
+    const verification = patch?.verifications?.at(-1)
+    lines.push(`### ${redact((f.severity || 'unknown').toUpperCase())}: ${redact(f.title)}`, '',
+      `- Rule / CWE: ${redact(f.rule_id || 'n/a')} / ${redact(f.cwe || 'n/a')}`,
+      `- Location: \`${redact(f.file_path)}:${f.line_no}\``,
+      `- Risk score: ${f.risk_score ?? 'n/a'} / 10`,
+      `- Reproduced: ${f.reproduced ? 'yes' : 'no'}`,
+      `- Fix verification: ${verification?.status || 'not verified'}`, '',
+      redact(f.explanation || 'No explanation provided.'), '',
+      'Review the source location and scan evidence for reproduction details.', '')
+    if (patch) lines.push(`Suggested remediation: ${redact(patch.summary || 'Patch available.')}`, 'Review the exported patch bundle before applying it.', '')
+  }
+  lines.push('## Evidence timeline', '')
+  for (const e of scan.evidence || []) lines.push(`- [${redact(e.stage)}] **${redact(e.actor)}**: ${redact(e.message)}`)
+  return `${lines.join('\n')}\n`
+}
+
+async function saveReport(scan) {
+  const path = resolve(`patchproof-${scan.id}-report.md`)
+  await writeFile(path, makeReport(scan), { mode: 0o600 })
+  console.log(`Report written: ${path}`)
+}
+
+async function exportFixes(scan) {
+  const diffs = (scan.findings || []).flatMap((f) => (f.patches || []).map((p) => p.diff).filter(Boolean))
+  if (!diffs.length) {
+    console.log('No generated fixes are available for this scan.')
+    return
+  }
+  const path = resolve(`patchproof-${scan.id}.patch`)
+  await writeFile(path, `${diffs.join('\n')}\n`, { mode: 0o600 })
+  console.log(`Patch bundle written: ${path} · review before applying`)
+}
+
+async function scanRepository() {
+  const repo = (await terminal.question('Git URL or local repository path> ')).trim()
+  if (!repo) return
+  let scan = await request('/api/scans', { method: 'POST', body: { repo_url: repo, branch: 'HEAD' } })
+  console.log(`Queued scan ${scan.id}`)
+  while (!['done', 'failed', 'cancelled'].includes(scan.status)) {
+    await sleep(2000)
+    scan = await request(`/api/scans/${scan.id}`)
+    stdout.write(`\r${scan.status.padEnd(16)}`)
+  }
+  console.log()
+  printScan(scan)
+  await saveReport(scan)
+}
+
+async function getScan() {
+  const id = (await terminal.question('Scan ID> ')).trim()
+  if (!/^[a-f\d]{12}$/i.test(id)) throw new Error('Enter a 12-character hexadecimal scan ID.')
+  const scan = await request(`/api/scans/${id}`)
+  printScan(scan)
+  return scan
+}
+
+try {
+  console.log(`PatchProof Security TUI · ${api}`)
+  while (true) {
+    console.log('\n1) Scan repository  2) Open report  3) Export fix patch  4) Quit')
+    const choice = (await terminal.question('Choose> ')).trim().toLowerCase()
+    try {
+      if (choice === '1') await scanRepository()
+      else if (choice === '2') await saveReport(await getScan())
+      else if (choice === '3') await exportFixes(await getScan())
+      else if (['4', 'q', 'quit'].includes(choice)) break
+      else console.log('Choose 1, 2, 3, or 4.')
+    } catch (error) {
+      console.error(`Error: ${error.message}`)
+    }
+  }
+} catch (error) {
+  if (error.name !== 'AbortError') console.error(`Error: ${error.message}`)
+} finally {
+  terminal.close()
+}
